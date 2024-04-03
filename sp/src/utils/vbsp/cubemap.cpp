@@ -84,12 +84,9 @@ inline bool SideHasCubemapAndWasntManuallyReferenced( int iSide )
 	return s_aCubemapSideData[iSide].bHasEnvMapInMaterial && !s_aCubemapSideData[iSide].bManuallyPickedByAnEnvCubemap;
 }
 
-char* g_pParallaxObbStrs[MAX_MAP_CUBEMAPSAMPLES];
 
-
-void Cubemap_InsertSample(const Vector& origin, int size, char* pParallaxObbStr = "")
+void Cubemap_InsertSample( const Vector& origin, int size )
 {
-	g_pParallaxObbStrs[g_nCubemapSamples] = pParallaxObbStr;
 	dcubemapsample_t *pSample = &g_CubemapSamples[g_nCubemapSamples];
 	pSample->origin[0] = ( int )origin[0];	
 	pSample->origin[1] = ( int )origin[1];	
@@ -532,7 +529,7 @@ static void GeneratePatchedName( const char *pMaterialName, const PatchInfo_t &i
 //-----------------------------------------------------------------------------
 // Patches the $envmap for a material and all its dependents, returns true if any patching happened
 //-----------------------------------------------------------------------------
-static bool PatchEnvmapForMaterialAndDependents(const char* pMaterialName, const PatchInfo_t& info, const char* pCubemapTexture, const char* pParallaxObbMatrix = "")
+static bool PatchEnvmapForMaterialAndDependents( const char *pMaterialName, const PatchInfo_t &info, const char *pCubemapTexture )
 {
 	// Do *NOT* patch the material if there is an $envmap specified and it's not 'env_cubemap'
 
@@ -550,7 +547,7 @@ static bool PatchEnvmapForMaterialAndDependents(const char* pMaterialName, const
 	const char *pDependentMaterial = FindDependentMaterial( pMaterialName, &pDependentMaterialVar );
 	if ( pDependentMaterial )
 	{
-		bDependentMaterialPatched = PatchEnvmapForMaterialAndDependents( pDependentMaterial, info, pCubemapTexture, pParallaxObbMatrix );
+		bDependentMaterialPatched = PatchEnvmapForMaterialAndDependents( pDependentMaterial, info, pCubemapTexture );
 	}
 
 	// If we have neither to patch, we're done
@@ -561,33 +558,13 @@ static bool PatchEnvmapForMaterialAndDependents(const char* pMaterialName, const
 	char pPatchedMaterialName[1024];
 	GeneratePatchedName( pMaterialName, info, true, pPatchedMaterialName, 1024 );
 
-	MaterialPatchInfo_t pPatchInfo[6];
+	MaterialPatchInfo_t pPatchInfo[2];
 	int nPatchCount = 0;
 	if ( bShouldPatchEnvCubemap )
 	{
 		pPatchInfo[nPatchCount].m_pKey = "$envmap";
 		pPatchInfo[nPatchCount].m_pRequiredOriginalValue = "env_cubemap";
 		pPatchInfo[nPatchCount].m_pValue = pCubemapTexture;
-		++nPatchCount;
-	}
-
-	// Parallax cubemap matrix
-	CUtlVector<char*> matRowList;
-	if (pParallaxObbMatrix[0] != '\0')
-	{
-		V_SplitString(pParallaxObbMatrix, ";", matRowList);
-
-		pPatchInfo[nPatchCount].m_pKey = "$envMapParallaxOBB1";
-		pPatchInfo[nPatchCount].m_pValue = matRowList[0];
-		++nPatchCount;
-		pPatchInfo[nPatchCount].m_pKey = "$envMapParallaxOBB2";
-		pPatchInfo[nPatchCount].m_pValue = matRowList[1];
-		++nPatchCount;
-		pPatchInfo[nPatchCount].m_pKey = "$envMapParallaxOBB3";
-		pPatchInfo[nPatchCount].m_pValue = matRowList[2];
-		++nPatchCount;
-		pPatchInfo[nPatchCount].m_pKey = "$envMapOrigin";
-		pPatchInfo[nPatchCount].m_pValue = matRowList[3];
 		++nPatchCount;
 	}
 
@@ -602,10 +579,7 @@ static bool PatchEnvmapForMaterialAndDependents(const char* pMaterialName, const
 		++nPatchCount;
 	}
 
-	CreateMaterialPatch(pMaterialName, pPatchedMaterialName, nPatchCount, pPatchInfo, PATCH_INSERT);
-
-	// Clean up parallax stuff
-	matRowList.PurgeAndDeleteElements();
+	CreateMaterialPatch( pMaterialName, pPatchedMaterialName, nPatchCount, pPatchInfo, PATCH_REPLACE );
 
 	return true;
 }
@@ -624,7 +598,7 @@ static bool PatchEnvmapForMaterialAndDependents(const char* pMaterialName, const
 // default (skybox) cubemap into this file so the cubemap doesn't have the pink checkerboard at
 // runtime before they run buildcubemaps.
 //-----------------------------------------------------------------------------
-static int Cubemap_CreateTexInfo(int originalTexInfo, int origin[3], int cubemapIndex)
+static int Cubemap_CreateTexInfo( int originalTexInfo, int origin[3] )
 {
 	// Don't make cubemap tex infos for nodes
 	if ( originalTexInfo == TEXINFO_NODE )
@@ -665,16 +639,9 @@ static int Cubemap_CreateTexInfo(int originalTexInfo, int origin[3], int cubemap
 		char pTextureName[1024];
 		GeneratePatchedName( "c", info, false, pTextureName, 1024 );
 
-		// Append origin info if this cubemap has a parallax OBB
-		char originAppendedString[1024] = "";
-		if (g_pParallaxObbStrs[cubemapIndex][0] != '\0')
-		{
-			Q_snprintf(originAppendedString, 1024, "%s;[%d %d %d]", g_pParallaxObbStrs[cubemapIndex], origin[0], origin[1], origin[2]);
-		}
-
 		// Hook the texture into the material and all dependent materials
 		// but if no hooking was necessary, exit out
-		if (!PatchEnvmapForMaterialAndDependents(pMaterialName, info, pTextureName, originAppendedString))
+		if ( !PatchEnvmapForMaterialAndDependents( pMaterialName, info, pTextureName ) )
 			return originalTexInfo;
 		
 		// Store off the name of the cubemap that we need to create since we successfully patched
@@ -764,7 +731,7 @@ void Cubemap_FixupBrushSidesMaterials( void )
 			}
 #endif
 			
-			pSide->texinfo = Cubemap_CreateTexInfo(pSide->texinfo, g_CubemapSamples[cubemapID].origin, cubemapID);
+			pSide->texinfo = Cubemap_CreateTexInfo( pSide->texinfo, g_CubemapSamples[cubemapID].origin );
 			if ( pSide->pMapDisp )
 			{
 				pSide->pMapDisp->face.texinfo = pSide->texinfo;
@@ -980,7 +947,7 @@ void Cubemap_AttachDefaultCubemapToSpecularSides( void )
 			Assert( pSide->texinfo == pSide->pMapDisp->face.texinfo );
 		}
 #endif				
-		pSide->texinfo = Cubemap_CreateTexInfo(pSide->texinfo, g_CubemapSamples[iCubemap].origin, iCubemap);
+		pSide->texinfo = Cubemap_CreateTexInfo( pSide->texinfo, g_CubemapSamples[iCubemap].origin );
 		if ( pSide->pMapDisp )
 		{
 			pSide->pMapDisp->face.texinfo = pSide->texinfo;
